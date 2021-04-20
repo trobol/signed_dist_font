@@ -10,15 +10,17 @@ FT_Library ft;
 
 #define WIDTH   1200
 #define HEIGHT  400
-#define PADDING 50
+#define PADDING 20
 Bitmap3B bmp;
+Bitmap1B bmp1;
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 void my_draw_bitmap(FT_Bitmap* bitmap, uint8_t* unpacked, int x, int y);
 Bitmap1B unpack_mono_bitmap(FT_Bitmap bitmap);
-uint8_t* calc_distances(uint32_t width, uint32_t height, uint8_t* unpacked);
+uint8_t* calc_distances(uint32_t width, uint32_t height, Bitmap1B unpacked);
+void bmp1b_draw_bmp1b(Bitmap1B dst, Bitmap1B src, uint32_t x, uint32_t y);
 
 int main(int argc, char *argv[]) {
 	if ( argc == 1) {
@@ -27,8 +29,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	bmp = bitmap3b_new(WIDTH, HEIGHT);
+	bmp1 = bitmap1b_new(WIDTH, HEIGHT);
 
-	memset(bmp.data, 0, bmp.pitch * bmp.height);
+	memset(bmp.data, 0, bmp.width * bmp.height);
+	memset(bmp1.data, 0, bmp1.width * bmp1.height);
 	
 
 	char* filename = argv[1];
@@ -71,7 +75,7 @@ int main(int argc, char *argv[]) {
 	glyph_index = FT_Get_Char_Index( face, text[n] );
 
 	/* load glyph image into the slot (erase previous one) */
-	error = FT_Load_Glyph( face, glyph_index, FT_LOAD_NO_HINTING | FT_LOAD_NO_AUTOHINT );
+	error = FT_Load_Glyph( face, glyph_index, FT_LOAD_DEFAULT );
 	if ( error )
 		return 0;
 
@@ -80,18 +84,18 @@ int main(int argc, char *argv[]) {
 		return 0;
 
 	Bitmap1B unpacked = unpack_mono_bitmap(slot->bitmap);
-	uint8_t* dist = calc_distances(slot->bitmap.width, slot->bitmap.rows, unpacked.data);
+	uint8_t* dist = calc_distances(slot->bitmap.width, slot->bitmap.rows, unpacked);
 
+	bmp1b_draw_bmp1b(bmp1, unpacked, pen_x, pen_y);
 	/* now, draw to our target surface */
-	my_draw_bitmap( &slot->bitmap, dist,
-					pen_x,
-					pen_y );
+	my_draw_bitmap( &slot->bitmap, dist, pen_x, pen_y );
 
 		free(unpacked.data);
-		pen_x += 100 + PADDING*2;
+		pen_x += slot->bitmap.width + PADDING * 2;
 	}
 
 	bitmap3b_write(bmp, "text.bmp");
+	bitmap1b_write(bmp1, "text1b.bmp");
 
 	return 0;
 }
@@ -100,12 +104,11 @@ int main(int argc, char *argv[]) {
 Bitmap1B unpack_mono_bitmap(FT_Bitmap bitmap)
 {
 
-	int y, x, byte_index, num_bits_done, rowstart, bits, bit_index;
-	unsigned char byte_value;
+	int y, byte_index, num_bits_done, rowstart, bits, bit_index;
+	uint8_t byte_value;
 	
 	Bitmap1B result = bitmap1b_new(bitmap.width, bitmap.rows);
 
-	
 	for (y = 0; y < bitmap.rows; y++) {
 		for (byte_index = 0; byte_index*8 < bitmap.width; byte_index++) {
 			
@@ -123,10 +126,10 @@ Bitmap1B unpack_mono_bitmap(FT_Bitmap bitmap)
 			}
 			
 			for (bit_index = 0; bit_index < bits; bit_index++) {
-				int bit;
-				bit = byte_value & (1 << (7 - bit_index));
 				
-				result.data[rowstart + bit_index] = bit;
+				uint8_t bit = byte_value >> (7-bit_index) & 1;
+
+				result.data[rowstart + bit_index] = bit * 255;
 			}
 		}
 	}
@@ -154,7 +157,6 @@ void my_draw_bitmap(FT_Bitmap* bitmap, uint8_t* unpacked, int x, int y) {
 		uint8_t val = unpacked[q * width + p];	
 		
 		color->r = color->g = color->b = val;
-		//if(val == 0) color->r = 255;
 		}
 	}
 }
@@ -201,7 +203,28 @@ void horz_pass(uint32_t width, uint32_t height, uint8_t* src, uint8_t* dst, uint
 }
 
 
-uint8_t* calc_distances(uint32_t src_width, uint32_t src_height, uint8_t* unpacked) {
+void bmp1b_draw_bmp1b(Bitmap1B dst, Bitmap1B src, uint32_t x, uint32_t y) {
+	uint32_t i, j, p, q;
+
+
+	uint32_t x_max = MIN(x + src.width, dst.width);
+	uint32_t y_max = MIN(y + src.height, dst.height);
+
+
+	for ( j = y, q = 0; j < y_max; j++, q++ )
+	{
+		for ( i = x, p = 0; i < x_max; i++, p++ )
+		{
+		
+			uint8_t* src_px = bitmap1b_get_pixel(src, p, q);
+			uint8_t* dst_px = bitmap1b_get_pixel(dst, i, j);
+
+			*dst_px = *src_px;
+		}
+	}
+}
+
+uint8_t* calc_distances(uint32_t src_width, uint32_t src_height, Bitmap1B unpacked) {
 
 	int32_t i, j;
 	uint32_t x_dist, y_dist;
@@ -221,19 +244,19 @@ uint8_t* calc_distances(uint32_t src_width, uint32_t src_height, uint8_t* unpack
 
 	for(uint32_t y = 0; y < src_height; y++)
 	for(uint32_t x = 0; x < src_width; x++) {
-		src[(y+PADDING) * width + (x+PADDING)] = unpacked[y * src_width + x] ? 0 : 255;
+		src[(y+PADDING) * width + (x+PADDING)] = unpacked.data[y * src_width + x] ? 0 : 255;
 	}
 
 	
 	for(uint32_t d = 0; d < 128; d++) {
-		horz_pass(width, height, src, dst, 1+d*d);
+		horz_pass(width, height, src, dst, 1+d*2);
 		uint8_t* tmp = dst;
 		dst = src;
 		src = tmp;
 	}
 	
 	for(uint32_t d = 0; d < 128; d++) {
-		vert_pass(width, height, src, dst, 1+d*d);
+		vert_pass(width, height, src, dst, 1+d*2);
 		uint8_t* tmp = dst;
 		dst = src;
 		src = tmp;
@@ -247,19 +270,19 @@ uint8_t* calc_distances(uint32_t src_width, uint32_t src_height, uint8_t* unpack
 
 	for(uint32_t y = 0; y < src_height; y++)
 	for(uint32_t x = 0; x < src_width; x++) {
-		src[(y+PADDING) * width + (x+PADDING)] = unpacked[y * src_width + x] ? 255 : 0;
+		src[(y+PADDING) * width + (x+PADDING)] = unpacked.data[y * src_width + x] ? 255 : 0;
 	}
 	
 	
 	for(uint32_t d = 0; d < 128; d++) {
-		horz_pass(width, height, src, dst, 1+d*d);
+		horz_pass(width, height, src, dst, 1+d*2);
 		uint8_t* tmp = dst;
 		dst = src;
 		src = tmp;
 	}
 	
 	for(uint32_t d = 0; d < 128; d++) {
-		vert_pass(width, height, src, dst, 1+d*d);
+		vert_pass(width, height, src, dst, 1+d*2);
 		uint8_t* tmp = dst;
 		dst = src;
 		src = tmp;
