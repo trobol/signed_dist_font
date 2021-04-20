@@ -1,5 +1,5 @@
 TARGET = prog
-LIBS = -lm -lfreetype
+LIBS = -lm -lfreetype -lm
 CC = gcc
 CFLAGS = -g -Wall -I/usr/include/freetype2 -I/usr/include/libpng16 
 

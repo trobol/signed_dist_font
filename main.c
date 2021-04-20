@@ -4,17 +4,21 @@
 
 #include <stdio.h>
 #include <string.h>
-
+#include <math.h>
 
 FT_Library ft;
 
-#define WIDTH   640
-#define HEIGHT  480
-Bitmap bmp;
+#define WIDTH   1200
+#define HEIGHT  400
+#define PADDING 50
+Bitmap3B bmp;
+
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 void my_draw_bitmap(FT_Bitmap* bitmap, uint8_t* unpacked, int x, int y);
-uint8_t* unpack_mono_bitmap(FT_Bitmap bitmap);
-uint8_t* calc_distances(FT_Bitmap* bitmap, uint8_t* unpacked);
+Bitmap1B unpack_mono_bitmap(FT_Bitmap bitmap);
+uint8_t* calc_distances(uint32_t width, uint32_t height, uint8_t* unpacked);
 
 int main(int argc, char *argv[]) {
 	if ( argc == 1) {
@@ -22,13 +26,13 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	bmp = new_bitmap(WIDTH, HEIGHT);
+	bmp = bitmap3b_new(WIDTH, HEIGHT);
 
-	memset(bmp.data, 0, bmp.width * bmp.height * 4);
+	memset(bmp.data, 0, bmp.pitch * bmp.height);
 	
 
 	char* filename = argv[1];
-	char* text = "hello";
+	char* text = "abcdefg";
 	size_t num_chars = strlen(text);
 	FT_Error error;
 
@@ -46,7 +50,7 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	error = FT_Set_Pixel_Sizes(face, 0, 100);
+	error = FT_Set_Pixel_Sizes(face, 0, 300);
 	if (error) {
 		printf("failed to set char size");
 		return 1;
@@ -75,29 +79,31 @@ int main(int argc, char *argv[]) {
 	if ( error )
 		return 0;
 
-	uint8_t* unpacked = unpack_mono_bitmap(slot->bitmap);
-	uint8_t* dist = calc_distances(&slot->bitmap, unpacked);
+	Bitmap1B unpacked = unpack_mono_bitmap(slot->bitmap);
+	uint8_t* dist = calc_distances(slot->bitmap.width, slot->bitmap.rows, unpacked.data);
+
 	/* now, draw to our target surface */
 	my_draw_bitmap( &slot->bitmap, dist,
 					pen_x,
 					pen_y );
 
-		free(unpacked);
-		pen_x += 100;
+		free(unpacked.data);
+		pen_x += 100 + PADDING*2;
 	}
-	write_bitmap(&bmp, "bitmap.bmp");
+
+	bitmap3b_write(bmp, "text.bmp");
 
 	return 0;
 }
 
 /* convert FreeType glyph bitmap to a simple 0|1 bitmap */
-uint8_t* unpack_mono_bitmap(FT_Bitmap bitmap)
+Bitmap1B unpack_mono_bitmap(FT_Bitmap bitmap)
 {
-	unsigned char* result;
+
 	int y, x, byte_index, num_bits_done, rowstart, bits, bit_index;
 	unsigned char byte_value;
 	
-	result = malloc(bitmap.rows * bitmap.width);
+	Bitmap1B result = bitmap1b_new(bitmap.width, bitmap.rows);
 
 	
 	for (y = 0; y < bitmap.rows; y++) {
@@ -120,7 +126,7 @@ uint8_t* unpack_mono_bitmap(FT_Bitmap bitmap)
 				int bit;
 				bit = byte_value & (1 << (7 - bit_index));
 				
-				result[rowstart + bit_index] = bit;
+				result.data[rowstart + bit_index] = bit;
 			}
 		}
 	}
@@ -131,8 +137,11 @@ uint8_t* unpack_mono_bitmap(FT_Bitmap bitmap)
 
 void my_draw_bitmap(FT_Bitmap* bitmap, uint8_t* unpacked, int x, int y) {
 	FT_Int  i, j, p, q;
-	FT_Int  x_max = x + bitmap->width;
-	FT_Int  y_max = y + bitmap->rows;
+	uint32_t width = bitmap->width + PADDING*2;
+	uint32_t height = bitmap->rows + PADDING*2;
+
+	FT_Int  x_max = MIN(x + width, WIDTH);
+	FT_Int  y_max = MIN(y + height, HEIGHT);
 
 
 	for ( j = y, q = 0; j < y_max; j++, q++ )
@@ -142,53 +151,124 @@ void my_draw_bitmap(FT_Bitmap* bitmap, uint8_t* unpacked, int x, int y) {
 		
 		Color* color = bmp_get_pixel(bmp, i, j);
 
-		color->r = color->g = color->b = color->a = unpacked[q * bitmap->width + p];
-
-
+		uint8_t val = unpacked[q * width + p];	
+		
+		color->r = color->g = color->b = val;
+		//if(val == 0) color->r = 255;
 		}
 	}
 }
 
+void vert_pass(uint32_t width, uint32_t height, uint8_t* src, uint8_t* dst, uint32_t delta) {
+	
+	for(uint32_t x = 0; x < width; x++)
+	for(uint32_t y = 0; y < height; y++) {
+		uint32_t src_val = src[y * width + x];
+	
+				
+		uint32_t a = 255;
+		uint32_t b = 255;
+
+		if (y > 0) a = src[(y-1) * width + x];
+		if (y < height-1) b = src[(y+1) * width + x];
+
+		uint32_t val = MIN(a, b) + delta;
 
 
+		dst[y * width + x] = val < src_val ? val : src_val;
 
-uint8_t* calc_distances(FT_Bitmap* bitmap, uint8_t* unpacked) {
-	uint8_t* result;
+	}
+}
+
+void horz_pass(uint32_t width, uint32_t height, uint8_t* src, uint8_t* dst, uint32_t delta) {
+	for(uint32_t y = 0; y < height; y++)
+	for(uint32_t x = 0; x < width; x++) {
+		uint32_t src_val = src[y * width + x];
+		
+		
+		uint32_t a = 255;
+		uint32_t b = 255;
+
+		if (x > 0) a = src[y * width + (x-1)];
+		if (x < width-1) b = src[y * width + (x+1)];
+
+		uint32_t val = MIN(a, b)+delta;
+
+		
+
+		dst[y * width + x] = MIN(val, src_val);
+	}
+}
+
+
+uint8_t* calc_distances(uint32_t src_width, uint32_t src_height, uint8_t* unpacked) {
+
 	int32_t i, j;
 	uint32_t x_dist, y_dist;
 	uint32_t sqr_dist;
-	uint32_t width = bitmap->width;
-	uint32_t height = bitmap->rows;
 
-	result = malloc(bitmap->rows * bitmap->width);
-	for(uint32_t y = 0; y < bitmap->rows; y++)
-	for(uint32_t x = 0; x < bitmap->width; x++) {
-		if (unpacked[y * width + x]) {
-			result[y * width + x] = 255;
-			continue;
-		}
-		sqr_dist = 255*255 * 2;
-		y_dist = 255;
-		x_dist = 255;
-		for(j = -255; j < 255; j++)
-		for(i = -255; i < 255; i++) {
-			int32_t x0 = x+i;
-			int32_t y0 = y+j;
-			if( x0 >= 0 && y0 >= 0 && x0 < width && y0 < height)
-				if (unpacked[y0 * width + x0]) {
-					uint32_t i0 = abs(i);
-					uint32_t j0 = abs(j);
-					uint32_t dist = i0*i0 + j0*j0;
-					if (dist < sqr_dist) {
-						x_dist = i0;
-						y_dist = j0;
-						sqr_dist = dist;
-					}
-				}
 
-		}
-		result[y * width + x] = x_dist + y_dist;
+	uint32_t width = src_width + PADDING*2;
+	uint32_t height = src_height + PADDING*2;
 
+	uint32_t buffer_size = width * height;
+
+	uint8_t* src = malloc(buffer_size);
+	uint8_t* dst = malloc(buffer_size);
+
+	
+	memset(src, 255, buffer_size);
+
+	for(uint32_t y = 0; y < src_height; y++)
+	for(uint32_t x = 0; x < src_width; x++) {
+		src[(y+PADDING) * width + (x+PADDING)] = unpacked[y * src_width + x] ? 0 : 255;
 	}
-	return result;
+
+	
+	for(uint32_t d = 0; d < 128; d++) {
+		horz_pass(width, height, src, dst, 1+d*d);
+		uint8_t* tmp = dst;
+		dst = src;
+		src = tmp;
+	}
+	
+	for(uint32_t d = 0; d < 128; d++) {
+		vert_pass(width, height, src, dst, 1+d*d);
+		uint8_t* tmp = dst;
+		dst = src;
+		src = tmp;
+	}
+
+	uint8_t* outside = src;
+
+	src = malloc(buffer_size);
+	
+	memset(src, 0, buffer_size);
+
+	for(uint32_t y = 0; y < src_height; y++)
+	for(uint32_t x = 0; x < src_width; x++) {
+		src[(y+PADDING) * width + (x+PADDING)] = unpacked[y * src_width + x] ? 255 : 0;
+	}
+	
+	
+	for(uint32_t d = 0; d < 128; d++) {
+		horz_pass(width, height, src, dst, 1+d*d);
+		uint8_t* tmp = dst;
+		dst = src;
+		src = tmp;
+	}
+	
+	for(uint32_t d = 0; d < 128; d++) {
+		vert_pass(width, height, src, dst, 1+d*d);
+		uint8_t* tmp = dst;
+		dst = src;
+		src = tmp;
+	}
+	
+	for(uint32_t i = 0; i < buffer_size; i++) {
+		uint32_t total = (255 - outside[i])/2 + src[i];
+		dst[i] = MIN(total, 255);
+	}
+	
+	return src;
 }
