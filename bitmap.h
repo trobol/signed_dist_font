@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+
 typedef struct __attribute__ ((packed)) Color {
 	uint8_t b, g, r;
 } Color;
@@ -17,8 +18,14 @@ Bitmap1B bitmap1b_new(uint32_t width, uint32_t height) {
 	return (Bitmap1B){.width=width, .height=height, .data=data};
 }
 
+void bitmap1b_free(Bitmap1B bmp) {
+	free(bmp.data);
+}
+
+#define MIN(a, b) ( ((a) < (b)) ? (a) : (b) )
+
 uint8_t* bitmap1b_get_pixel(Bitmap1B bmp, uint32_t x, uint32_t y) {
-	return bmp.data + x + (bmp.width * y); 
+	return bmp.data + MIN(x, bmp.width) + (bmp.width * MIN(y, bmp.height)); 
 }
 
 typedef struct Bitmap3B {
@@ -52,8 +59,8 @@ typedef struct __attribute__ ((packed)) BMP_Header {
 
 typedef struct __attribute__ ((packed)) DIB_Header {
 	uint32_t bytes;
-	uint32_t width;
-	uint32_t height;
+	int32_t width;
+	int32_t height;
 	uint16_t planes;
 	uint16_t bits;
 	uint32_t compression;
@@ -79,7 +86,7 @@ void write_bitmap_header(FILE* fp, uint32_t width, uint32_t height, uint16_t bit
 	DIB_Header dib_header = (DIB_Header){
 		.bytes=sizeof(DIB_Header),
 		.width=width,
-		.height=height,
+		.height=-height,
 		.planes=1,
 		.bits=bits,
 		.compression=0,
@@ -96,6 +103,52 @@ void write_bitmap_header(FILE* fp, uint32_t width, uint32_t height, uint16_t bit
 	fwrite(&dib_header, sizeof(DIB_Header), 1, fp);
 }
 
+void bitmap1b_shrink_pass(Bitmap1B src) {
+
+	for (uint32_t y = 0; y < src.height; y++)
+	for (uint32_t x = 0; x < src.width; x+=2) {
+
+		uint32_t a = *bitmap1b_get_pixel(src, x, y);
+		uint32_t b = *bitmap1b_get_pixel(src, x+1, y);
+
+		*bitmap1b_get_pixel(src, x/2, y) = (a+b) / 2;
+	}
+	
+
+	
+	for (uint32_t y = 0; y < src.height; y+=2)
+	for (uint32_t x = 0; x < src.width; x++) {
+
+		uint32_t a = *bitmap1b_get_pixel(src, x, y);
+		uint32_t b = *bitmap1b_get_pixel(src, x, y+1);
+
+		*bitmap1b_get_pixel(src, x, y/2) = (a+b) / 2;
+	}
+	
+}
+
+Bitmap1B bitmap1b_crop(Bitmap1B bmp, uint32_t width, uint32_t height) {
+	Bitmap1B result = bitmap1b_new(width, height);
+	for(uint32_t y = 0; y < height; y++)
+	for(uint32_t x = 0; x < width; x++) {
+		*bitmap1b_get_pixel(result, x, y) = *bitmap1b_get_pixel(bmp, x, y);
+	}
+
+	return result; 
+}
+
+
+// must be a power of 2
+Bitmap1B bitmap1b_linear_shrink(Bitmap1B bmp, uint32_t itr) {
+	for(uint32_t i = 0; i < itr; i++) {
+		bitmap1b_shrink_pass(bmp);
+	}
+	uint32_t width = bmp.width >> itr;
+	uint32_t height = bmp.height >> itr;
+	Bitmap1B cropped = bitmap1b_crop(bmp, width, height);
+	bitmap1b_free(bmp);
+	return cropped;
+}
 
 void __bitmap_write(const char* path, uint8_t* data, uint32_t width, uint32_t height, uint8_t bytes) {
 	FILE* fp;
@@ -114,7 +167,7 @@ void __bitmap_write(const char* path, uint8_t* data, uint32_t width, uint32_t he
 
 	const char* null = "null";
 	// write data in inverse order (thats how bitmaps work)
-	for(uint32_t i = height; i > 0; i--) {
+	for(uint32_t i = 0; i < height; i++) {
 		uint8_t* line_start = data + (i * width * bytes);
 		fwrite(line_start, data_line_size, 1, fp);
 		fwrite(null, padding, 1, fp);
@@ -134,5 +187,5 @@ void bitmap1b_write(Bitmap1B bmp, const char* path) {
 	for(uint32_t i = 0; i < bmp_size; i++) {
 		pixel_data[i].r = pixel_data[i].g = pixel_data[i].b = bmp.data[i];
 	}
-	__bitmap_write(path, pixel_data, bmp.width, bmp.height, 3);
+	__bitmap_write(path, (uint8_t*)pixel_data, bmp.width, bmp.height, 3);
 }
