@@ -18,9 +18,11 @@ Bitmap1B bmp1;
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 typedef struct Character {
+	uint32_t x, y;
 	uint32_t width, height;
 	uint32_t left, top;
 	uint32_t advance;
+	
 } Character;
 
 
@@ -85,7 +87,7 @@ int main(int argc, char *argv[]) {
 	int n, i;
 
 	int pen_x = 0;
-	int pen_y = 250;
+	int pen_y = 0;
 
 	uint32_t row_height = 0;
 	const int shrink_factor = 2;
@@ -113,9 +115,9 @@ int main(int argc, char *argv[]) {
 		int32_t top = face->glyph->bitmap_top;
 		int32_t width = slot->bitmap.width + PADDING * 2;
 		int32_t height = slot->bitmap.rows + PADDING * 2;
-		uint32_t advance = (face->glyph->advance.x >> 6) + PADDING;
+		
 
-		if ( pen_x + advance > WIDTH) {
+		if ( pen_x + width > WIDTH) {
 			pen_x = 0;
 			pen_y += row_height + PADDING * 2;
 			row_height = 0;
@@ -124,10 +126,12 @@ int main(int argc, char *argv[]) {
 		Bitmap1B dist = calc_distances(slot->bitmap.width, slot->bitmap.rows, unpacked);
 
 		row_height = MAX(row_height, height);
-		bmp1b_draw_bmp1b(bmp1, dist, pen_x + left, pen_y - top);
+		bmp1b_draw_bmp1b(bmp1, dist, pen_x, pen_y);
 
-
+		uint32_t advance = (face->glyph->advance.x >> 6) + PADDING;
 		characters[i] = (Character){
+			.x=pen_x >> shrink_factor,
+			.y=pen_y >> shrink_factor,
 			.width= width >> shrink_factor,
 			.height= height >> shrink_factor,
 			.left= left >> shrink_factor,
@@ -136,26 +140,30 @@ int main(int argc, char *argv[]) {
 			.advance= advance >> shrink_factor,
 		};
 
-		//fprintf(data_fp, "%i %i %i %i %i %i\n", n, width, height, left, top, advance);
+		
 
 	
 
 		bitmap1b_free(unpacked);
 		bitmap1b_free(dist);
 
-		pen_x += advance;
+		pen_x += width;
 	}
 	bitmap1b_write(bmp1, "full_res.bmp");
 
-	fclose(data_fp);
 
 	Bitmap1B shrink = bitmap1b_linear_shrink(bmp1, shrink_factor);
 
+	// write character positions
 	for(uint32_t i = 0; i < CHAR_COUNT; i++) {
 		Character c = characters[i];
 		//draw_border(shrink, c.left, c.top, c.width, c.height);
+		fprintf(data_fp, "%i %i %i %i %i %i %i %i\n", i + CHAR_START,
+					c.x, c.y, c.width, c.height, c.left, c.top, c.advance);
 	}
 	
+	
+	fclose(data_fp);
 	bitmap1b_write(shrink, "text.bmp");
 
 	return 0;
